@@ -1,0 +1,76 @@
+@page "/manage/grants"
+@attribute [Authorize]
+@inject IOpenIddictAuthorizationManager AuthorizationManager
+@inject IOpenIddictApplicationManager ApplicationManager
+@inject UserManager<ApplicationUser> UserManager
+
+<PageTitle>Aplicações conectadas — Sufficit Identity</PageTitle>
+
+<div class="auth-card">
+    <h1>Aplicações conectadas</h1>
+    <p class="info">Veja e revogue os acessos concedidos a aplicações.</p>
+
+    @if (_grants.Any())
+    {
+        <ul class="grant-list">
+            @foreach (var g in _grants)
+            {
+                <li class="grant-item">
+                    <div>
+                        <strong>@g.ClientName</strong>
+                        <span class="muted">— scopes: @string.Join(", ", g.Scopes)</span>
+                    </div>
+                    <form method="post" @onsubmit="() => RevokeAsync(g.AuthorizationId)">
+                        <button type="submit" class="btn btn-secondary btn-sm">Revogar</button>
+                    </form>
+                </li>
+            }
+        </ul>
+    }
+    else
+    {
+        <p class="muted">Nenhuma aplicação conectada.</p>
+    }
+</div>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState>? _authTask { get; set; }
+
+    private List<GrantView> _grants = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = await _authTask.GetAuthenticatedUserAsync(UserManager);
+        if (user is null) return;
+
+        var subjectId = await UserManager.GetUserIdAsync(user);
+        await foreach (var auth in AuthorizationManager.FindAsync(subject: subjectId,
+                                                                    client: null,
+                                                                    status: OpenIddictConstants.Statuses.Valid,
+                                                                    type: null,
+                                                                    scopes: null))
+        {
+            var clientId = (string?)await AuthorizationManager.GetIdAsync(auth);
+            var scopes = (await AuthorizationManager.GetScopesAsync(auth)).ToList();
+            var applicationId = await AuthorizationManager.GetApplicationIdAsync(auth);
+            string? clientName = null;
+            if (applicationId is not null)
+            {
+                var app = await ApplicationManager.FindByIdAsync(applicationId);
+                if (app is not null)
+                    clientName = (string?)await ApplicationManager.GetDisplayNameAsync(app);
+            }
+            _grants.Add(new GrantView(clientId!, clientName ?? "desconhecido", scopes));
+        }
+    }
+
+    private async Task RevokeAsync(string id)
+    {
+        var auth = await AuthorizationManager.FindByIdAsync(id);
+        if (auth is not null)
+            await AuthorizationManager.DeleteAsync(auth);
+        _grants.RemoveAll(g => g.AuthorizationId == id);
+    }
+
+    private sealed record GrantView(string AuthorizationId, string ClientName, List<string> Scopes);
+}

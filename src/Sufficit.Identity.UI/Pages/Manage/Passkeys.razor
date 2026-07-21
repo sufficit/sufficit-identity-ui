@@ -1,0 +1,73 @@
+@page "/manage/passkeys"
+@attribute [Authorize]
+@inject UserManager<ApplicationUser> UserManager
+@inject ILogger<Passkeys> Logger
+
+<PageTitle>Passkeys — Sufficit Identity</PageTitle>
+
+<div class="auth-card">
+    <h1>Passkeys (WebAuthn)</h1>
+    <p class="info">Chaves de segurança biométricas (impressão digital, Face ID, etc.) para login sem senha.</p>
+
+    @if (_error is not null) { <div class="alert alert-error">@_error</div> }
+
+    <h3>Seus passkeys</h3>
+    @if (_passkeys.Any())
+    {
+        <ul class="passkey-list">
+            @foreach (var pk in _passkeys)
+            {
+                <li>
+                    <span>@pk.Name</span>
+                    <span class="muted">criado em @pk.CreatedAt.ToString("dd/MM/yyyy")</span>
+                </li>
+            }
+        </ul>
+    }
+    else
+    {
+        <p class="muted">Nenhum passkey cadastrado.</p>
+    }
+
+    <div class="alert alert-info">
+        💡 A adição de passkeys requer invocação do <code>SignInManager.PerformPasskeyAttestationAsync</code>,
+        que precisa do endpoint JavaScript do navegador (<code>navigator.credentials.create</code>).
+        Será implementado com interoperabilidade JS no próximo ciclo.
+    </div>
+</div>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState>? _authTask { get; set; }
+    private string? _error;
+    private List<PasskeyView> _passkeys = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = await _authTask.GetAuthenticatedUserAsync(UserManager);
+        if (user is null) return;
+
+        // UserManager.GetPasskeysAsync está disponível no .NET 10 (Identity passkeys).
+        // No .NET 9 usamos reflexão para invocar se disponível; caso contrário lista vazia.
+        try
+        {
+            var method = UserManager.GetType().GetMethod("GetPasskeysAsync");
+            if (method is not null)
+            {
+                var task = method.Invoke(UserManager, new object?[] { user });
+                if (task is System.Collections.IEnumerable pks)
+                {
+                    _passkeys = pks.Cast<dynamic>()
+                        .Select(p => new PasskeyView((string?)p.Name, (DateTimeOffset)p.CreatedAt))
+                        .ToList();
+                }
+            }
+        }
+        catch
+        {
+            // Passkeys não disponíveis nesta versão do Identity.
+            _passkeys = new();
+        }
+    }
+
+    private sealed record PasskeyView(string? Name, DateTimeOffset CreatedAt);
+}

@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sufficit Identity</title>
+    <link rel="stylesheet" href="_content/Sufficit.Identity.UI/css/site.css" />
+    <HeadOutlet />
+</head>
+<body>
+    <Routes />
+    <script>
+        // Shows a full-page "connecting…" overlay when the user clicks an
+        // external-login link. Pages are statically rendered (no Blazor
+        // interactivity), so this is plain JS; the delegated listener
+        // survives enhanced-navigation DOM patches.
+        document.addEventListener('click', function (e) {
+            var el = e.target.closest('[data-redirect-overlay]');
+            if (!el || document.querySelector('.redirect-overlay')) return;
+            var overlay = document.createElement('div');
+            overlay.className = 'redirect-overlay';
+            overlay.innerHTML =
+                '<div class="redirect-overlay-box">' +
+                '<div class="spinner"></div>' +
+                '<p>Conectando a ' + el.getAttribute('data-redirect-overlay') + '…</p>' +
+                '<p class="redirect-overlay-hint">Você será redirecionado automaticamente.</p>' +
+                '</div>';
+            document.body.appendChild(overlay);
+        });
+    </script>
+    <script src="_framework/blazor.web.js"></script>
+    <script src="_content/Sufficit.Identity.UI/js/identity.js"></script>
+</body>
+</html>

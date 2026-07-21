@@ -1,0 +1,241 @@
+@page "/manage/twofactor"
+@attribute [Authorize]
+@inject UserManager<ApplicationUser> UserManager
+@inject SignInManager<ApplicationUser> SignInManager
+@inject NavigationManager Navigation
+@inject ILogger<TwoFactor> Logger
+
+<PageTitle>Autenticação em 2 etapas — Sufficit Identity</PageTitle>
+
+<div class="auth-card">
+    <h1>Autenticação em 2 etapas (2FA)</h1>
+
+    @if (_error is not null) { <div class="alert alert-error" role="alert">@_error</div> }
+    @if (_success is not null) { <div class="alert alert-success" role="alert">@_success</div> }
+
+    @if (_twoFactorEnabled)
+    {
+        <div class="alert alert-success">2FA está <strong>ativada</strong>.</div>
+        <p class="info">App autenticador conectado.</p>
+
+        @if (_recoveryCodes is { Length: > 0 })
+        {
+            <div class="alert alert-warning" role="alert">
+                <p><strong>Guarde seus códigos de recuperação</strong> em local seguro.
+                Eles são a única forma de acessar sua conta se você perder o acesso ao app autenticador.</p>
+            </div>
+            <div class="recovery-codes">
+                @foreach (var recoveryCode in _recoveryCodes)
+                {
+                    <code class="recovery-code">@recoveryCode</code>
+                }
+            </div>
+            <p class="muted">Cada código pode ser usado apenas uma vez.</p>
+        }
+        else
+        {
+            <div class="btn-group">
+                <EditForm Method="post" Model="_empty" OnValidSubmit="ResetAuthenticatorAsync" FormName="reset-authenticator">
+                    <button type="submit" class="btn btn-secondary">Reconfigurar app autenticador</button>
+                </EditForm>
+                <EditForm Method="post" Model="_empty" OnValidSubmit="GenerateRecoveryCodesAsync" FormName="gen-recovery">
+                    <button type="submit" class="btn btn-secondary">Gerar códigos de recuperação</button>
+                </EditForm>
+                <EditForm Method="post" Model="_empty" OnValidSubmit="DisableAsync" FormName="disable-2fa">
+                    <button type="submit" class="btn btn-danger">Desativar 2FA</button>
+                </EditForm>
+            </div>
+        }
+    }
+    else
+    {
+        <p class="info">Use um app autenticador (Google Authenticator, Authy) para gerar códigos.</p>
+        @if (_qrCode is not null)
+        {
+            <div class="qr-container">
+                <img src="@_qrCode" alt="QR Code 2FA" />
+            </div>
+            <p class="muted">Ou digite a chave manualmente:</p>
+            <code class="manual-key">@_sharedKey</code>
+
+            <EditForm Model="_verify" Method="post" OnValidSubmit="VerifyAsync" FormName="verify-2fa">
+                <DataAnnotationsValidator />
+                <div class="form-group">
+                    <label for="code">Código de verificação</label>
+                    <InputText id="code" @bind-Value="_verify.Code" class="form-control"
+                               placeholder="123456" autocomplete="one-time-code" autofocus />
+                </div>
+                <button type="submit" class="btn btn-primary btn-block">Ativar 2FA</button>
+            </EditForm>
+        }
+        else
+        {
+            <EditForm Method="post" Model="_empty" OnValidSubmit="GenerateAsync" FormName="gen-2fa">
+                <button type="submit" class="btn btn-primary btn-block">Configurar app autenticador</button>
+            </EditForm>
+        }
+    }
+</div>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState>? _authTask { get; set; }
+
+    private bool _twoFactorEnabled;
+    private string? _qrCode;
+    private string? _sharedKey;
+    private string? _error;
+    private string? _success;
+    private string[]? _recoveryCodes;
+
+    [SupplyParameterFromForm(FormName = "verify-2fa")]
+    private VerifyInput _verify { get; set; } = new();
+
+    // Marker instance so EditForms without bound fields get a non-null Model
+    // parameter (Blazor Server requires either Model or EditContext).
+    private readonly object _empty = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = await _authTask.GetAuthenticatedUserAsync(UserManager);
+        if (user is null) return;
+        _twoFactorEnabled = await UserManager.GetTwoFactorEnabledAsync(user);
+
+        if (_twoFactorEnabled)
+        {
+            // Count unredeemed recovery codes (only show "Generate" button if none).
+            var count = await UserManager.CountRecoveryCodesAsync(user);
+            if (count > 0)
+            {
+                _success = $"Você tem {count} códigos de recuperação disponíveis.";
+            }
+        }
+        else
+        {
+            // BUG FIX (static SSR): _sharedKey/_qrCode used to live only in this
+            // component's instance fields, set by GenerateAsync(). Under static
+            // SSR, Blazor creates a NEW component instance for every request —
+            // including the POST that submits the "Ativar 2FA" verify form — so by
+            // the time VerifyAsync() ran, _sharedKey was always null again and the
+            // handler silently no-op'd (verification never actually ran).
+            //
+            // The authenticator key itself IS already durably persisted (in the
+            // user's tokens store) by ResetAuthenticatorKeyAsync/GetAuthenticatorKeyAsync,
+            // independent of component state. So instead of trying to smuggle the
+            // key across the POST via a field, re-derive it deterministically here,
+            // on every request, straight from UserManager — this makes the QR code
+            // and the verify form survive the POST (and an invalid-code retry)
+            // without any hidden field/TempData plumbing.
+            var existingKey = await UserManager.GetAuthenticatorKeyAsync(user);
+            if (!string.IsNullOrEmpty(existingKey))
+            {
+                _sharedKey = existingKey;
+                _qrCode = await BuildQrCodeAsync(user, existingKey);
+            }
+        }
+    }
+
+    private async Task GenerateAsync()
+    {
+        var user = await _authTask.GetAuthenticatedUserAsync(UserManager);
+        if (user is null) return;
+
+        _sharedKey = await UserManager.GetAuthenticatorKeyAsync(user);
+        if (string.IsNullOrEmpty(_sharedKey))
+        {
+            await UserManager.ResetAuthenticatorKeyAsync(user);
+            _sharedKey = await UserManager.GetAuthenticatorKeyAsync(user);
+        }
+
+        _qrCode = await BuildQrCodeAsync(user, _sharedKey!);
+    }
+
+    private async Task<string> BuildQrCodeAsync(ApplicationUser user, string sharedKey)
+    {
+        var email = await UserManager.GetEmailAsync(user) ?? user.UserName;
+        var otpauthUri = $"otpauth://totp/SufficitIdentity:{email}?secret={sharedKey}&issuer=SufficitIdentity&digits=6";
+        using var qrGenerator = new QRCoder.QRCodeGenerator();
+        var qrData = qrGenerator.CreateQrCode(otpauthUri, QRCoder.QRCodeGenerator.ECCLevel.Q);
+        var pngQrCode = new QRCoder.PngByteQRCode(qrData);
+        var pngBytes = pngQrCode.GetGraphic(20);
+        return $"data:image/png;base64,{Convert.ToBase64String(pngBytes)}";
+    }
+
+    private async Task VerifyAsync()
+    {
+        var user = await _authTask.GetAuthenticatedUserAsync(UserManager);
+        if (user is null) return;
+
+        // Deliberately NOT gated on _sharedKey/_qrCode here (see OnInitializedAsync
+        // comment) — VerifyTwoFactorTokenAsync re-reads the authenticator key from
+        // the user's persisted tokens store itself, so it validates correctly
+        // regardless of this component instance's field state.
+        var ok = await UserManager.VerifyTwoFactorTokenAsync(
+            user, UserManager.Options.Tokens.AuthenticatorTokenProvider, _verify.Code);
+
+        if (ok)
+        {
+            await UserManager.SetTwoFactorEnabledAsync(user, true);
+            _twoFactorEnabled = true;
+            _qrCode = null;
+            _error = null;
+
+            // Auto-generate recovery codes on first enable
+            _recoveryCodes = (await UserManager.GenerateNewTwoFactorRecoveryCodesAsync(user, 10) ?? Array.Empty<string>()).ToArray();
+            _success = "2FA ativada com sucesso. Guarde os códigos de recuperação abaixo.";
+
+            Logger.LogInformation("User {User} enabled 2FA.", user.UserName);
+        }
+        else
+        {
+            _error = "Código inválido. Tente novamente.";
+        }
+    }
+
+    private async Task GenerateRecoveryCodesAsync()
+    {
+        var user = await _authTask.GetAuthenticatedUserAsync(UserManager);
+        if (user is null) return;
+
+        _recoveryCodes = (await UserManager.GenerateNewTwoFactorRecoveryCodesAsync(user, 10) ?? Array.Empty<string>()).ToArray();
+        _success = "Novos códigos de recuperação gerados. Os antigos foram invalidados.";
+        Logger.LogInformation("Recovery codes regenerated for {User}.", user.UserName);
+    }
+
+    private async Task ResetAuthenticatorAsync()
+    {
+        var user = await _authTask.GetAuthenticatedUserAsync(UserManager);
+        if (user is null) return;
+
+        await UserManager.ResetAuthenticatorKeyAsync(user);
+        _twoFactorEnabled = false;
+        _qrCode = null;
+        _sharedKey = null;
+        _recoveryCodes = null;
+        _success = "Chave do autenticador reconfigurada. Configure o app novamente.";
+
+        // Refresh sign-in cookie to reflect updated security stamp
+        await SignInManager.RefreshSignInAsync(user);
+        Logger.LogInformation("Authenticator reset for {User}.", user.UserName);
+    }
+
+    private async Task DisableAsync()
+    {
+        var user = await _authTask.GetAuthenticatedUserAsync(UserManager);
+        if (user is null) return;
+
+        await UserManager.SetTwoFactorEnabledAsync(user, false);
+        _twoFactorEnabled = false;
+        _recoveryCodes = null;
+        _success = "2FA desativada.";
+
+        await SignInManager.RefreshSignInAsync(user);
+        Logger.LogInformation("User {User} disabled 2FA.", user.UserName);
+    }
+
+    private sealed class VerifyInput
+    {
+        [Required(ErrorMessage = "O código é obrigatório.")]
+        [StringLength(7, ErrorMessage = "O código deve ter 6 dígitos.", MinimumLength = 6)]
+        public string Code { get; set; } = string.Empty;
+    }
+}

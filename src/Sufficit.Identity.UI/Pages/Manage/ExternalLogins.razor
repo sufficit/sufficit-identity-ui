@@ -1,0 +1,55 @@
+@page "/manage/externallogins"
+@attribute [Authorize]
+@inject SignInManager<ApplicationUser> SignInManager
+@inject UserManager<ApplicationUser> UserManager
+
+<PageTitle>Logins externos — Sufficit Identity</PageTitle>
+
+<div class="auth-card">
+    <h1>Logins externos</h1>
+    <p class="info">Gerencie os provedores externos vinculados à sua conta.</p>
+
+    <h3>Vinculados</h3>
+    @if (_linked.Any())
+    {
+        <ul class="external-list">
+            @foreach (var info in _linked)
+            {
+                <li><span class="badge">@info.LoginProvider</span></li>
+            }
+        </ul>
+    }
+    else
+    {
+        <p class="muted">Nenhum provedor externo vinculado.</p>
+    }
+
+    <h3>Disponíveis</h3>
+    <div class="external-providers">
+        @foreach (var scheme in _availableSchemes)
+        {
+            var linked = _linked.Any(l => l.LoginProvider == scheme.Name);
+            <span class="badge @(linked ? "badge-success" : "badge-outline")">@scheme.DisplayName</span>
+        }
+    </div>
+</div>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState>? _authTask { get; set; }
+    private IList<UserLoginInfo> _linked = new List<UserLoginInfo>();
+    private List<Microsoft.AspNetCore.Authentication.AuthenticationScheme> _availableSchemes = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        // _availableSchemes can always be populated, even before auth resolves.
+        _availableSchemes = (await SignInManager.GetExternalAuthenticationSchemesAsync()).ToList();
+
+        if (_authTask is null) return;
+        var authState = await _authTask;
+        if (authState?.User?.Identity?.IsAuthenticated != true) return;
+
+        var user = await UserManager.GetUserAsync(authState.User);
+        if (user is null) return;
+        _linked = await UserManager.GetLoginsAsync(user);
+    }
+}

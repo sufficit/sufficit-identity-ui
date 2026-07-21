@@ -1,0 +1,28 @@
+@inherits LayoutComponentBase
+
+<div class="page">
+    <header class="topbar">
+        <div class="topbar-brand">
+            <a href="/">Sufficit Identity</a>
+        </div>
+        <nav class="topbar-nav">
+            <AuthorizeView>
+                <Authorized>
+                    <a href="/manage" class="nav-link">Minha conta</a>
+                    <a href="/account/logout" class="nav-link">Sair</a>
+                </Authorized>
+                <NotAuthorized>
+                    <a href="/account/login" class="nav-link">Entrar</a>
+                </NotAuthorized>
+            </AuthorizeView>
+        </nav>
+    </header>
+
+    <main class="content">
+        @Body
+    </main>
+
+    <footer class="footer">
+        <span>&copy; @DateTime.UtcNow.Year Sufficit</span>
+    </footer>
+</div>

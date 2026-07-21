@@ -1,0 +1,145 @@
+@page "/manage/sessions"
+@attribute [Authorize]
+@inject UserManager<ApplicationUser> UserManager
+@inject OpenIddict.Abstractions.IOpenIddictAuthorizationManager Authorizations
+@inject OpenIddict.Abstractions.IOpenIddictApplicationManager Applications
+@inject SignInManager<ApplicationUser> SignInManager
+@inject NavigationManager Navigation
+@inject ILogger<Sessions> Logger
+
+<PageTitle>Sessões ativas — Sufficit Identity</PageTitle>
+
+<div class="auth-card">
+    <h1>Sessões ativas</h1>
+    <p class="info">Autorizações OAuth/OIDC ativas para sua conta.</p>
+
+    @if (_loading)
+    {
+        <p class="muted">Carregando…</p>
+    }
+    else if (_sessions.Count == 0)
+    {
+        <p class="muted">Nenhuma sessão ativa encontrada.</p>
+    }
+    else
+    {
+        <ul class="session-list">
+            @foreach (var s in _sessions)
+            {
+                <li class="session-item">
+                    <div>
+                        <strong>@s.ClientName</strong>
+                        @if (s.ApplicationId is not null)
+                        {
+                            <span class="muted">(@s.ApplicationId)</span>
+                        }
+                    </div>
+                    <div class="muted">
+                        Criada: @s.CreatedAt.ToString("dd/MM/yyyy HH:mm") UTC<br />
+                        Status: @s.Status
+                    </div>
+                    <div class="btn-group">
+                        <EditForm Method="post" Model="s.AuthorizationId" OnValidSubmit="() => RevokeAsync(s.AuthorizationId)" FormName="@($"revoke-{s.AuthorizationId}")">
+                            <button type="submit" class="btn btn-danger btn-sm">Revogar</button>
+                        </EditForm>
+                    </div>
+                </li>
+            }
+        </ul>
+
+        <hr />
+
+        <EditForm Method="post" Model="_empty" OnValidSubmit="RevokeAllAsync" FormName="revoke-all">
+            <button type="submit" class="btn btn-danger">Revogar todas as sessões</button>
+        </EditForm>
+    }
+</div>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState>? _authTask { get; set; }
+
+    private List<SessionView> _sessions = new();
+    private bool _loading = true;
+    private readonly object _empty = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = await _authTask.GetAuthenticatedUserAsync(UserManager);
+        if (user is null)
+        {
+            _loading = false;
+            return;
+        }
+
+        var subjectId = await UserManager.GetUserIdAsync(user);
+        await foreach (var auth in Authorizations.FindAsync(
+            subject: subjectId,
+            client: null,
+            status: OpenIddictConstants.Statuses.Valid,
+            type: null,
+            scopes: null))
+        {
+            var authId = (string?)await Authorizations.GetIdAsync(auth);
+            var createdAt = await Authorizations.GetCreationDateAsync(auth);
+            var status = await Authorizations.GetStatusAsync(auth) ?? "?";
+            var appId = await Authorizations.GetApplicationIdAsync(auth);
+
+            string? clientName = null;
+            if (appId is not null)
+            {
+                var app = await Applications.FindByIdAsync(appId);
+                if (app is not null)
+                {
+                    clientName = (string?)await Applications.GetDisplayNameAsync(app);
+                }
+            }
+
+            _sessions.Add(new SessionView(
+                authId ?? "?",
+                appId,
+                clientName ?? "desconhecido",
+                status,
+                createdAt?.UtcDateTime ?? DateTime.UtcNow));
+        }
+
+        _loading = false;
+    }
+
+    private async Task RevokeAsync(string authorizationId)
+    {
+        var auth = await Authorizations.FindByIdAsync(authorizationId);
+        if (auth is not null)
+        {
+            await Authorizations.DeleteAsync(auth);
+            _sessions.RemoveAll(s => s.AuthorizationId == authorizationId);
+            Logger.LogInformation("User revoked authorization {AuthId}", authorizationId);
+        }
+    }
+
+    private async Task RevokeAllAsync()
+    {
+        var user = await _authTask.GetAuthenticatedUserAsync(UserManager);
+        if (user is null) return;
+
+        var subjectId = await UserManager.GetUserIdAsync(user);
+        await foreach (var auth in Authorizations.FindAsync(
+            subject: subjectId,
+            client: null,
+            status: OpenIddictConstants.Statuses.Valid,
+            type: null,
+            scopes: null))
+        {
+            await Authorizations.DeleteAsync(auth);
+        }
+
+        Logger.LogInformation("User {Subject} revoked all sessions.", subjectId);
+        _sessions.Clear();
+    }
+
+    private sealed record SessionView(
+        string AuthorizationId,
+        string? ApplicationId,
+        string ClientName,
+        string Status,
+        DateTime CreatedAt);
+}

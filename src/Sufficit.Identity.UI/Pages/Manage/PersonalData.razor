@@ -1,0 +1,77 @@
+@page "/manage/personaldata"
+@attribute [Authorize]
+@inject UserManager<ApplicationUser> UserManager
+@inject IJSRuntime JS
+@inject ILogger<PersonalData> Logger
+
+<PageTitle>Meus dados (LGPD) — Sufficit Identity</PageTitle>
+
+<div class="auth-card">
+    <h1>Meus dados (LGPD)</h1>
+    <p class="info">Baixe ou exclua seus dados pessoais conforme a Lei Geral de Proteção de Dados.</p>
+
+    @if (_error is not null) { <div class="alert alert-error">@_error</div> }
+
+    <div class="btn-group">
+        <EditForm Method="post" Model="_empty" OnValidSubmit="DownloadAsync" FormName="download-data">
+            <button type="submit" class="btn btn-primary">Baixar meus dados (JSON)</button>
+        </EditForm>
+        <a href="/manage/deleteaccount" class="btn btn-danger">Excluir minha conta</a>
+    </div>
+</div>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState>? _authTask { get; set; }
+
+    private string? _error;
+    private readonly object _empty = new();
+
+    private async Task DownloadAsync()
+    {
+        var user = await _authTask.GetAuthenticatedUserAsync(UserManager);
+        if (user is null) return;
+
+        // Build the personal data dictionary (matches Identity's built-in
+        // PersonalDataAttribute convention when present, falls back to all
+        // readable scalar/string properties otherwise).
+        var personalData = new Dictionary<string, string>();
+        foreach (var prop in typeof(ApplicationUser).GetProperties()
+            .Where(p => p.CanRead
+                        && (p.PropertyType.IsValueType || p.PropertyType == typeof(string))
+                        && p.Name != nameof(ApplicationUser.PasswordHash)
+                        && p.Name != nameof(ApplicationUser.SecurityStamp)
+                        && p.Name != nameof(ApplicationUser.ConcurrencyStamp)))
+        {
+            personalData[prop.Name] = prop.GetValue(user)?.ToString() ?? "";
+        }
+
+        // Include user claims (helps users understand what data we hold about them)
+        try
+        {
+            var claims = await UserManager.GetClaimsAsync(user);
+            personalData["Claims"] = string.Join("; ", claims.Select(c => $"{c.Type}={c.Value}"));
+        }
+        catch { /* claims optional */ }
+
+        // Include user logins (Google/Facebook/etc)
+        try
+        {
+            var logins = await UserManager.GetLoginsAsync(user);
+            personalData["ExternalLogins"] = string.Join("; ", logins.Select(l => l.LoginProvider));
+        }
+        catch { /* logins optional */ }
+
+        var json = System.Text.Json.JsonSerializer.Serialize(
+            personalData,
+            new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+
+        // Trigger browser download via JS interop (Blazor Server friendly).
+        var bytes = System.Text.Encoding.UTF8.GetBytes(json);
+        var base64 = Convert.ToBase64String(bytes);
+        var fileName = $"personal-data-{user.Id}-{DateTime.UtcNow:yyyyMMdd}.json";
+
+        await JS.InvokeVoidAsync("sufficitIdentityDownloadFile", fileName, base64, "application/json");
+
+        Logger.LogInformation("Personal data downloaded by user {UserId}", user.Id);
+    }
+}

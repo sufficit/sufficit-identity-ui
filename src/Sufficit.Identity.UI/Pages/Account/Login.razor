@@ -1,0 +1,141 @@
+@page "/account/login"
+@using Microsoft.AspNetCore.Authentication
+@using Microsoft.AspNetCore.Components.Server.ProtectedBrowserStorage
+@inject SignInManager<ApplicationUser> SignInManager
+@inject UserManager<ApplicationUser> UserManager
+@inject RegisterConfiguration RegisterConfig
+@inject NavigationManager Navigation
+@inject ILogger<Login> Logger
+
+<PageTitle>Entrar — Sufficit Identity</PageTitle>
+
+<div class="auth-card">
+    <h1>Entrar</h1>
+
+    @if (_errorMessage is not null)
+    {
+        <div class="alert alert-error" role="alert">@_errorMessage</div>
+    }
+
+    @if (_errorMessage is not null && _errorMessage.Contains("duas etapas"))
+    {
+        // Handled via redirect in OnValidSubmit; show fallback link in case redirect fails.
+        <p class="info">Sua conta exige autenticação em duas etapas.</p>
+        <a href="/account/loginwith2fa?returnUrl=@Uri.EscapeDataString(_returnUrl ?? "/")" class="btn btn-primary">
+            Continuar para verificação 2FA
+        </a>
+    }
+    else
+    {
+        <EditForm Model="Model" Method="post" OnValidSubmit="HandleLoginAsync" FormName="login">
+            <DataAnnotationsValidator />
+
+            <div class="form-group">
+                <label for="username">@( RegisterConfig.RequireUsername ? "E-mail ou usuário" : "E-mail" )</label>
+                <InputText id="username" @bind-Value="Model.UserName" class="form-control"
+                           autocomplete="username" autofocus />
+                <ValidationMessage For="@(() => Model.UserName)" />
+            </div>
+
+            <div class="form-group">
+                <label for="password">Senha</label>
+                <InputText id="password" type="password" @bind-Value="Model.Password" class="form-control"
+                           autocomplete="current-password" />
+                <ValidationMessage For="@(() => Model.Password)" />
+            </div>
+
+            <div class="form-check">
+                <InputCheckbox id="rememberMe" @bind-Value="Model.RememberMe" />
+                <label for="rememberMe">Manter conectado</label>
+            </div>
+
+            <button type="submit" class="btn btn-primary btn-block">Entrar</button>
+        </EditForm>
+
+        <div class="auth-links">
+            <a href="/account/forgotpassword">Esqueceu a senha?</a>
+            <br />
+            <a href="/account/register">Criar nova conta</a>
+            <br />
+            <a href="/account/resendemailconfirmation">Reenviar confirmação de e-mail</a>
+        </div>
+
+        <div class="external-logins">
+            @if (_externalProviders.Any())
+            {
+                <p class="separator"><span>ou entre com</span></p>
+                @foreach (var scheme in _externalProviders)
+                {
+                    @* Link straight to the MVC challenge endpoint and opt out of
+                       Blazor enhanced navigation: the endpoint 302s to an external
+                       domain (Google/Facebook), which enhanced nav can't follow —
+                       it left the page frozen for seconds before falling back.
+                       data-redirect-overlay triggers the "connecting…" overlay
+                       (script in App.razor). *@
+                    <a href="/account/externalchallenge?provider=@scheme.Name&returnUrl=@Uri.EscapeDataString(_returnUrl ?? "/")"
+                       class="btn btn-external"
+                       data-enhance-nav="false"
+                       data-redirect-overlay="@scheme.DisplayName">
+                        @scheme.DisplayName
+                    </a>
+                }
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [SupplyParameterFromForm(FormName = "login")]
+    private LoginViewModel Model { get; set; } = new();
+
+    [SupplyParameterFromQuery(Name = "returnUrl")]
+    private string? _returnUrlQuery { get; set; }
+
+    private string? _returnUrl;
+    private string? _errorMessage;
+    private List<AuthenticationScheme> _externalProviders = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Never trust returnUrl blindly: reject absolute/off-host URLs to prevent
+        // an authenticated open redirect (attacker crafts a login link with
+        // returnUrl=https://evil.example and phishes the victim post-login).
+        _returnUrl = LocalUrlValidator.EnsureLocal(_returnUrlQuery);
+        Model.ReturnUrl = _returnUrl;
+
+        var schemes = await SignInManager.GetExternalAuthenticationSchemesAsync();
+        _externalProviders = schemes.ToList();
+    }
+
+    private async Task HandleLoginAsync()
+    {
+        var result = await SignInManager.PasswordSignInAsync(
+            Model.UserName, Model.Password, Model.RememberMe, lockoutOnFailure: true);
+
+        if (result.Succeeded)
+        {
+            Logger.LogInformation("User {User} logged in.", Model.UserName);
+            Navigation.NavigateTo(_returnUrl ?? "/", forceLoad: true);
+        }
+        else if (result.RequiresTwoFactor)
+        {
+            // Redirect to 2FA verification page. SignInManager has already
+            // set the Identity.TwoFactorUserId cookie so GetTwoFactorAuthenticationUserAsync
+            // returns the user on the next request.
+            var url = $"/account/loginwith2fa?returnUrl={Uri.EscapeDataString(_returnUrl ?? "/")}&rememberMe={Model.RememberMe}";
+            Navigation.NavigateTo(url, forceLoad: true);
+        }
+        else if (result.IsLockedOut)
+        {
+            _errorMessage = "Conta bloqueada por muitas tentativas. Tente novamente mais tarde.";
+        }
+        else if (result.IsNotAllowed)
+        {
+            _errorMessage = "Login não permitido. Confirme seu e-mail ou contate o suporte.";
+        }
+        else
+        {
+            _errorMessage = "Usuário ou senha inválidos.";
+        }
+    }
+}
