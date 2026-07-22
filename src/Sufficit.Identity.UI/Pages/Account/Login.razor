@@ -1,10 +1,12 @@
 @page "/account/login"
 @using Microsoft.AspNetCore.Authentication
 @using Microsoft.AspNetCore.Components.Server.ProtectedBrowserStorage
+@using Microsoft.AspNetCore.Identity
 @inject SignInManager<ApplicationUser> SignInManager
 @inject UserManager<ApplicationUser> UserManager
 @inject RegisterConfiguration RegisterConfig
 @inject NavigationManager Navigation
+@inject IJSRuntime JS
 @inject ILogger<Login> Logger
 
 <PageTitle>Entrar — Sufficit Identity</PageTitle>
@@ -80,6 +82,15 @@
                     </a>
                 }
             }
+
+            @if (_passkeySupported)
+            {
+                <p class="separator"><span>ou use passkey</span></p>
+                <button type="button" class="btn btn-passkey btn-block" disabled="@_passkeyBusy"
+                        @onclick="PasskeySignInAsync">
+                    @(_passkeyBusy ? "Verificando..." : "🔑 Entrar com passkey")
+                </button>
+            }
         </div>
     }
 </div>
@@ -99,6 +110,8 @@
     private string? _returnUrl;
     private string? _errorMessage;
     private List<AuthenticationScheme> _externalProviders = new();
+    private bool _passkeySupported;
+    private bool _passkeyBusy;
 
     protected override async Task OnInitializedAsync()
     {
@@ -110,6 +123,92 @@
 
         var schemes = await SignInManager.GetExternalAuthenticationSchemesAsync();
         _externalProviders = schemes.ToList();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            try
+            {
+                _passkeySupported = await JS.InvokeAsync<bool>("passkeys.isSupported");
+                StateHasChanged();
+            }
+            catch { /* JS interop indisponível no prerender */ }
+        }
+    }
+
+    private async Task PasskeySignInAsync()
+    {
+        _errorMessage = null;
+        _passkeyBusy = true;
+
+        try
+        {
+            // 1. Resolve o usuário pelo username (se informado). Passkey login
+            //    sem username (discoverable) é possível mas requer que o
+            //    authenticator suporte resident keys — usamos o username
+            //    quando disponível para máxima compatibilidade.
+            ApplicationUser? user = null;
+            if (!string.IsNullOrWhiteSpace(Model.UserName))
+            {
+                user = await UserManager.FindByNameAsync(Model.UserName);
+                if (user is null)
+                {
+                    _errorMessage = "Usuário não encontrado.";
+                    return;
+                }
+            }
+            else
+            {
+                // Login discoverable: usa um usuário "placeholder" para gerar
+                // opções sem allowCredentials (browser pergunta qual credencial usar).
+                // MakePasskeyRequestOptionsAsync exige TUser não-null — passamos
+                // um novo ApplicationUser vazio só para satisfazer a assinatura.
+                user = new ApplicationUser();
+            }
+            var requestOptions = await SignInManager.MakePasskeyRequestOptionsAsync(user);
+
+            // 2. Invoca navigator.credentials.get no browser
+            var credentialJson = await JS.InvokeAsync<string>(
+                "passkeys.get",
+                System.Text.Json.JsonSerializer.Serialize(requestOptions)
+            );
+
+            // 3. Processa no server: PasskeySignInAsync valida o assertion e
+            //    faz o SignIn do usuário via cookie de aplicação.
+            var result = await SignInManager.PasskeySignInAsync(credentialJson);
+
+            if (result.Succeeded)
+            {
+                Navigation.NavigateTo(_returnUrl ?? "/", forceLoad: true);
+            }
+            else if (result.IsNotAllowed)
+            {
+                _errorMessage = "Login não permitido. Confirme seu e-mail ou contate o suporte.";
+            }
+            else if (result.IsLockedOut)
+            {
+                _errorMessage = "Conta bloqueada por muitas tentativas.";
+            }
+            else
+            {
+                _errorMessage = "Falha na autenticação por passkey.";
+            }
+        }
+        catch (Microsoft.JSInterop.JSException ex)
+        {
+            _errorMessage = ex.Message; // cancelado, não suportado, etc
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Erro no login por passkey");
+            _errorMessage = "Falha ao autenticar com passkey.";
+        }
+        finally
+        {
+            _passkeyBusy = false;
+        }
     }
 
     private async Task HandleLoginAsync()
