@@ -56,8 +56,13 @@
 @code {
     [CascadingParameter] private Task<AuthenticationState>? _authTask { get; set; }
 
+    private DeleteInput? _boundModel;
     [SupplyParameterFromForm(FormName = "delete-account")]
-    private DeleteInput _model { get; set; } = new();
+    private DeleteInput _model
+    {
+        get => _boundModel ??= new();
+        set => _boundModel = value;
+    }
     private string? _authEmail;
     private string? _error;
     private bool _deleted;

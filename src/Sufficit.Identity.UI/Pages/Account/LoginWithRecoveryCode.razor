@@ -37,8 +37,13 @@
 @code {
     [SupplyParameterFromQuery] private string? ReturnUrl { get; set; }
 
+    private RecoveryInput? _boundModel;
     [SupplyParameterFromForm(FormName = "recovery-code")]
-    private RecoveryInput _model { get; set; } = new();
+    private RecoveryInput _model
+    {
+        get => _boundModel ??= new();
+        set => _boundModel = value;
+    }
     private string? _returnUrl;
     private string? _error;
 

@@ -41,8 +41,13 @@
 </div>
 
 @code {
+    private EmailInput? _boundModel;
     [SupplyParameterFromForm(FormName = "resend-confirm")]
-    private EmailInput _model { get; set; } = new();
+    private EmailInput _model
+    {
+        get => _boundModel ??= new();
+        set => _boundModel = value;
+    }
     private bool _sent;
     private string? _error;
 

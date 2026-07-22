@@ -45,8 +45,13 @@
     [SupplyParameterFromQuery] private string? ReturnUrl { get; set; }
     [SupplyParameterFromQuery] private bool RememberMe { get; set; }
 
+    private TwoFactorInput? _boundModel;
     [SupplyParameterFromForm(FormName = "login-2fa")]
-    private TwoFactorInput _model { get; set; } = new();
+    private TwoFactorInput _model
+    {
+        get => _boundModel ??= new();
+        set => _boundModel = value;
+    }
     private string? _returnUrl;
     private string? _error;
 

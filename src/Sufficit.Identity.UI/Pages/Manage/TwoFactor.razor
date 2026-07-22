@@ -87,8 +87,13 @@
     private string? _success;
     private string[]? _recoveryCodes;
 
+    private VerifyInput? _boundVerify;
     [SupplyParameterFromForm(FormName = "verify-2fa")]
-    private VerifyInput _verify { get; set; } = new();
+    private VerifyInput _verify
+    {
+        get => _boundVerify ??= new();
+        set => _boundVerify = value;
+    }
 
     // Marker instance so EditForms without bound fields get a non-null Model
     // parameter (Blazor Server requires either Model or EditContext).

@@ -90,8 +90,13 @@ else
     [SupplyParameterFromQuery(Name = "returnUrl")]
     private string? _returnUrlQuery { get; set; }
 
+    private RegisterInput? _boundModel;
     [SupplyParameterFromForm(FormName = "register")]
-    private RegisterInput _model { get; set; } = new();
+    private RegisterInput _model
+    {
+        get => _boundModel ??= new();
+        set => _boundModel = value;
+    }
 
     private string? _returnUrl;
     private string? _error;

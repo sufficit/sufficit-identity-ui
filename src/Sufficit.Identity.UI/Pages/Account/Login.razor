@@ -85,8 +85,13 @@
 </div>
 
 @code {
+    private LoginViewModel? _boundModel;
     [SupplyParameterFromForm(FormName = "login")]
-    private LoginViewModel Model { get; set; } = new();
+    private LoginViewModel Model
+    {
+        get => _boundModel ??= new();
+        set => _boundModel = value;
+    }
 
     [SupplyParameterFromQuery(Name = "returnUrl")]
     private string? _returnUrlQuery { get; set; }
